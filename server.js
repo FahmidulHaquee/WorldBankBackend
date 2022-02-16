@@ -25,17 +25,20 @@ const corsInputs = {
     "User-Agent",
   ],
   credentials: true,
+  origin: /^.+localhost:(3000)$/,
 };
 
 app.use(abcCors(corsInputs));
 app.get("/:country", showCountryData);
 app.get("/indicators", getAllIndicators);
+app.get("/countries", getAllCountries);
 app.post("/login", checkUserLogin);
 app.post("/sessions", createSession);
 app.post("/register", registerUser);
+app.post("/searches", addSearch);
 app.start({ port: PORT });
 
-async function createSession(server) {
+async function createSession(server, user_id) {
   const sessionId = v4.generate();
   await db.query(
     `INSERT INTO sessions (uuid, user_id, created_at) VALUES (?, ?, datetime('now'))`,
@@ -46,44 +49,30 @@ async function createSession(server) {
     ...(
       await db.query("SELECT * FROM users WHERE id = ?", [user_id])
     ).asObjects(),
-  ][0];
+  ];
+
+  console.log("session");
+  console.log(user);
 
   const expiryDate = new Date(new Date().getTime() + 7 * 24 * 60 * 60 * 1000);
   server.setCookie({
     name: "sessionId",
     value: sessionId,
     expires: expiryDate,
-    path: "/home",
+    path: "/",
   });
   server.setCookie({
     name: "user_id",
     value: user_id,
     expires: expiryDate,
-    path: "/home",
+    path: "/",
   });
   server.setCookie({
     name: "email",
     value: user.email,
     expires: expiryDate,
-    path: "/home",
+    path: "/",
   });
-}
-
-async function getCurrentUser(sessionId) {
-  const [session] = await [
-    ...db
-      .query(
-        `SELECT * FROM sessions WHERE JULIANDAY(datetime('now')) - JULIANDAY(created_at) < 7 AND uuid = ?`,
-        [sessionId]
-      )
-      .asObjects(),
-  ];
-  const [user] = await [
-    ...db
-      .query("SELECT * FROM users WHERE id = ?", [session.user_id])
-      .asObjects(),
-  ];
-  return user;
 }
 
 async function showCountryData(server) {
@@ -110,10 +99,12 @@ async function showCountryData(server) {
       query += ` AND IndicatorName LIKE $indicatorName`;
       queryFilters.indicatorName = indicatorDecoded;
     }
-    if (startYear) {
+    if (startYear || endYear) {
+      const defStartYear = 1960;
+      const defEndYear = 2015;
       query += ` AND Year BETWEEN $startYear AND $endYear`;
-      queryFilters.startYear = startYear;
-      queryFilters.endYear = endYear;
+      queryFilters.startYear = startYear || defStartYear;
+      queryFilters.endYear = endYear || defEndYear;
     }
 
     query += ` ORDER BY IndicatorName`;
@@ -149,26 +140,36 @@ async function showCountryData(server) {
 }
 
 async function registerUser(server) {
-  const { username, password } = await server.body;
+  const { email, password } = await server.body;
   const salt = await bcrypt.genSalt(8);
   const passwordEncrypted = await bcrypt.hash(password, salt);
   let [checkEmail] = [
     ...(
-      await db.query(`SELECT email FROM users WHERE email = ?`, [username])
+      await db.query(`SELECT email FROM users WHERE email = ?`, [email])
     ).asObjects(),
   ];
   if (checkEmail) {
     return server.json({ error: "User already exists" }, 400);
   } else {
-    const query = `INSERT INTO users (email, password, salt, created_at, updated_at) VALUES (?, ?, ?, datetime('now'), datetime('now'));`;
-    await db.query(query, [username, passwordEncrypted, salt]);
+    const query =
+      (`INSERT INTO users (email, password, salt, created_at, updated_at) VALUES (?, ?, ?, datetime('now'), datetime('now'))`,
+      [email, passwordEncrypted, salt]);
+    await db.query(query);
     return server.json({ success: "User registered successfully." }, 200);
   }
 }
 
 async function getAllIndicators(server) {
   const response = await client.queryObject({
-    text: "SELECT DISTINCT IndicatorName FROM Indicators",
+    text: "SELECT DISTINCT IndicatorName FROM Indicators ORDER BY IndicatorName ASC",
+  });
+
+  server.json(response, 200);
+}
+
+async function getAllCountries(server) {
+  const response = await client.queryObject({
+    text: "SELECT DISTINCT ShortName FROM Countries ORDER BY ShortName ASC",
   });
 
   server.json(response, 200);
@@ -176,14 +177,23 @@ async function getAllIndicators(server) {
 
 async function checkUserLogin(server) {
   const { email, password } = await server.body;
-  let exists =
-    `IF EXISTS (SELECT email, password FROM users WHERE email = ? AND password = ?)`[
-      (email, password)
-    ];
-  if (exists) {
-    await getSearchPage;
+  const checkEmail = [
+    ...(
+      await db.query("SELECT * FROM users WHERE email = ?", [email])
+    ).asObjects(),
+  ];
+
+  console.log(checkEmail);
+
+  if (checkEmail.length === 1) {
+    if (await bcrypt.compare(password, checkEmail[0].password)) {
+      createSession(server, checkEmail[0].id);
+      return server.json(checkEmail[0], 200);
+    } else {
+      server.json({ error: "Incorrect password" }, 400);
+    }
   } else {
-    throw new Error("User not found");
+    server.json({ error: "User not found." }, 404);
   }
 }
 
