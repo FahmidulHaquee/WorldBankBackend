@@ -32,10 +32,11 @@ app.use(abcCors(corsInputs));
 app.get("/:country", showCountryData);
 app.get("/indicators", getAllIndicators);
 app.get("/countries", getAllCountries);
+app.get("/searches/:user_id", getUserSearches);
 app.post("/login", checkUserLogin);
 app.post("/sessions", createSession);
 app.post("/register", registerUser);
-app.post("/searches", addSearch);
+app.post("/searches/:user_id", addUserSearch);
 app.start({ port: PORT });
 
 async function createSession(server, user_id) {
@@ -51,7 +52,6 @@ async function createSession(server, user_id) {
     ).asObjects(),
   ];
 
-  console.log("session");
   console.log(user);
 
   const expiryDate = new Date(new Date().getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -75,12 +75,23 @@ async function createSession(server, user_id) {
   });
 }
 
+async function findCurrentUserId(email) {
+  const checkEmail = [
+    ...(
+      await db.query("SELECT * FROM users WHERE email = ?", [email])
+    ).asObjects(),
+  ];
+
+  console.log(checkEmail[0].id);
+  return checkEmail[0].id;
+}
+
 async function showCountryData(server) {
   const { country } = await server.params;
   const countryDecoded = decodeURIComponent(country);
 
   const { indicator, startYear, endYear } = await server.queryParams;
-  const indicatorDecoded = `%${decodeURIComponent(indicator)}%`;
+  const indicatorDecoded = `%${indicator}%`;
 
   const countryExists = await client.queryObject({
     text: "SELECT ShortName FROM Countries WHERE ShortName = $1",
@@ -121,10 +132,10 @@ async function showCountryData(server) {
     } else {
       server.json(
         {
-          statusCode: 204,
-          message: "204: No content. No data found with those restraints",
+          statusCode: 404,
+          message: "404: Not Found. No data found with those restraints",
         },
-        204
+        404
       );
     }
   } else {
@@ -140,39 +151,38 @@ async function showCountryData(server) {
 }
 
 async function registerUser(server) {
-  const { email, password } = await server.body;
+  const { username, password } = await server.body;
   const salt = await bcrypt.genSalt(8);
   const passwordEncrypted = await bcrypt.hash(password, salt);
   let [checkEmail] = [
     ...(
-      await db.query(`SELECT email FROM users WHERE email = ?`, [email])
+      await db.query(`SELECT email FROM users WHERE email = ?`, [username])
     ).asObjects(),
   ];
   if (checkEmail) {
     return server.json({ error: "User already exists" }, 400);
   } else {
-    const query =
-      (`INSERT INTO users (email, password, salt, created_at, updated_at) VALUES (?, ?, ?, datetime('now'), datetime('now'))`,
-      [email, passwordEncrypted, salt]);
-    await db.query(query);
+    const query = `INSERT INTO users (email, password, salt, created_at, updated_at) VALUES (?, ?, ?, datetime('now'), datetime('now'))`;
+    await db.query(query, [username, passwordEncrypted, salt]);
+    createSession(server, await findCurrentUserId(username));
     return server.json({ success: "User registered successfully." }, 200);
   }
 }
 
 async function getAllIndicators(server) {
-  const response = await client.queryObject({
-    text: "SELECT DISTINCT IndicatorName FROM Indicators ORDER BY IndicatorName ASC",
-  });
+  let response = await client.queryArray(
+    "SELECT DISTINCT IndicatorName FROM Indicators ORDER BY IndicatorName ASC"
+  );
 
-  server.json(response, 200);
+  server.json(response.rows.flat(), 200);
 }
 
 async function getAllCountries(server) {
-  const response = await client.queryObject({
-    text: "SELECT DISTINCT ShortName FROM Countries ORDER BY ShortName ASC",
-  });
+  let response = await client.queryArray(
+    "SELECT DISTINCT ShortName FROM Countries ORDER BY ShortName ASC"
+  );
 
-  server.json(response, 200);
+  server.json(response.rows.flat(), 200);
 }
 
 async function checkUserLogin(server) {
@@ -195,6 +205,40 @@ async function checkUserLogin(server) {
   } else {
     server.json({ error: "User not found." }, 404);
   }
+}
+
+async function addUserSearch(server) {
+  const { user_id } = server.params;
+  let { country, indicator, start_year, end_year } = await server.body;
+  console.log(country, indicator, start_year, end_year);
+
+  if (country.length > 1) {
+    country = country.flat().reduce((acc, val) => acc + " vs " + val);
+  } else {
+    country = country[0];
+  }
+
+  await db.query(
+    "INSERT INTO searches (created_at, country, indicator, start_year, end_year, user_id) VALUES (datetime('now'), ?, ?, ?, ?, ?)",
+    [country, indicator[0], start_year, end_year, user_id]
+  );
+
+  server.json({ success: "search added" }, 200);
+}
+
+async function getUserSearches(server) {
+  const { user_id } = server.params;
+
+  const response = [
+    ...(
+      await db.query(
+        "SELECT created_at, country, indicator, start_year, end_year FROM searches WHERE user_id = ?",
+        [user_id]
+      )
+    ).asObjects(),
+  ];
+
+  return server.json(response);
 }
 
 console.log(`Server running on localhost:/${PORT}`);

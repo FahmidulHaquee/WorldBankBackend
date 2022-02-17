@@ -8,13 +8,5 @@ wbd-db/Indicators.csv
 .gitignore
 wbd-db/Series.csv
 wbd-db/SeriesNotes.csv
-archive/Country.csv
-archive/CountryNotes.csv
-.gitignore
-archive/Footnotes.csv
-archive/SeriesNotes.csv
-archive/Series.csv
-.gitignore
-archive/database.sqlite
-archive/hashes.txt
-archive/Indicators.csv
+wbd-db.db
+wbd-db.db
