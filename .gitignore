@@ -10,3 +10,5 @@ wbd-db/Series.csv
 wbd-db/SeriesNotes.csv
 wbd-db.db
 wbd-db.db
+server.js
+mockDB.db
